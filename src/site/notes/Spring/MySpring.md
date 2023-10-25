@@ -529,14 +529,141 @@ UserService userService = (UserService) applicationContext.getBean("userService"
 
 ## 事务管理
 
-事务切面逻辑？
+事务切面逻辑：
 
 >	添加@Transaction注解开启事务
 >	-> *事务管理器* 新建数据库连接connection
 >	-> connection.autocommit = false
 >	-> target.test()
 >	-> connection.commit()/rollback()
->	-> 
 
 Q1：为什么spring会让事务管理器建立连接，而不直接让jdbcTemplate建立连接？
 >	因为jdbcTemplate建立的连接默认autocommit = true，会直接提交，起不到事务管理的作用
+
+Q2：在service类中添加如下方法，调用test方法，a方法的@Transactional注解会不会起作用？
+```
+@Transactional
+public void test() {
+	jdbcTemplate.execute("...");
+	a();
+}
+
+@Transactional(propagation = Propagation.NEVER)
+public void a {
+	jdbcTemplate.execute("...");
+}
+...
+
+```
+
+>	不会。
+>	-> 调用service.test()
+>	-> 进入代理类的test方法
+>	-> 代理了执行target.test()
+>	-> 由于target为普通service类，@Transactional注解不起作用
+>	-> 不会抛出异常（正常情况下@Transactional(propagation = Propagation.NEVER)会导致抛出异常）
+>	
+>	为什么test方法的@Transactional注解有用？
+>	因为调用service.test()时执行方法的是代理类，会去处理@Transactional注解。而执行a方法的时候只是普通类。
+
+Q3：如何解决Q2的问题？
+
+>	1.拆分类：拆分出另外一个类s1，在s1中写a方法，再将s类注入原service(s)类，在test方法中调用s.a()即可
+>	2.自己注入自己
+>	3.其他方法拿到当前类代理对象，例如AopContext.currentProxy()
+
+```
+@Autowired
+private Service s1;
+
+@Transactional
+public void test() {
+	jdbcTemplate.execute("...");
+	s1.a();
+}
+
+=================================
+
+@Autowired
+private Service s;
+
+@Transactional
+public void test() {
+	jdbcTemplate.execute("...");
+	s.a();
+}
+```
+
+Q4：@Configuration注解对事务管理的影响（config类不加@Configuration注解错误问题）
+
+>	我们知道，
+>	1️⃣ spring的事务管理器创建connection放在LocalThread<Map<Datasource,connection>>中。
+>		*“为什么泛形里面放的是map而不直接是connection?
+>			因为现实工程中可能会使用多种datasource。”*
+>	2️⃣ 不加@Configuration注解时，jdbcTemplate和事务管理器创建的datasource对象不是同一个对象，只有事务管理器创建出来的对象才有事务处理的功能，jdbcTemplate的autocommit = true
+>	
+>	因此，加上@Configuration注解会使jdbcTemplate调用的是事务管理器创建的datasource，而不会自己再创建一个新的datasource，避免事务管理的失效。
+
+Q5：@Configuration注解解决Q4的原理？
+
+>	*@Configuration，AOP，@Lazy都是使用的动态代理机制*
+>	AppConfig加上@Configuration注解之后会生成一个动态代理类
+
+```
+public classAppConfig {//config类
+	@Bean
+	public IdbcTemplate jdbcTemplate() {
+		return new JdbcTemplate(dataSource());
+	}
+	@Bean
+	public PlatformTransactionManager transactionManager() {
+		DataSourceTransactionManager transactionManager = new DataSourceTransactionManager();
+		transactionManager.setDataSource(dataSource());
+		return transactionManager;
+	}
+	@Bean
+	public void datasource() {
+		...
+	}
+	
+	...
+```
+
+```
+class UserServiceProxy extends AppConfig｛//config代理类
+	UserService target;
+	public void jdbcTemplate(){
+		//代理逻辑
+		super.jdbcTemplate();
+	}
+	public void datasource(){
+		//代理逻辑
+	}
+｝
+```
+
+>	*config类中jdbcTemplate()和transactionManager()方法中的datasource()方法都是代理类调用的*
+
+>	代理类来调用jdbcTemplate()和datasource()方法。
+>	代理类在调用这两个方法时，会首先执行代理逻辑。即：在执行jdbcTemplate()方法时，先检测spring容器里面有没有datasource，如果有就直接返回spring容器中的datasource；如果没有就调用datasource()方法去创建一个datasource并放入spring容器。
+>	通过这种方式来保证jdbcTemplate()和datasource()得到的是同一个datasource
+
+```
+//在config类中
+
+@Bean
+public JdbcTemplate jdbcTemplate() {
+	return new JdbcTemplate (dataSource)());
+}
+@Bean
+public PlatformTransactionManager transactionManager() {
+	DataSourceTransactionManager transactionManager = new DataSourceTransactionManager();
+	transactionManager.setDataSource(dataSource1());
+	return transactionManager;
+}
+```
+
+>	上述代码的情况：如果jdbcTemplate()和transactionManager()方法中的datasource不是同一个，即使加@Configuration注解也会出现Q4错误
+
+
+## 循环依赖
