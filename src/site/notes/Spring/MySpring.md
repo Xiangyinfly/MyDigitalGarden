@@ -667,3 +667,53 @@ public PlatformTransactionManager transactionManager() {
 
 
 ## 循环依赖
+
+>*三级缓存(三个map)
+>	singletonobjects(即单例池)
+>	earlySingletonobjects
+>	singletonFactories*
+
+>背景：AService类注入了BService类属性，BService类注入了AService类属性
+
+利用一个map解决循环依赖问题：
+	AService的Bean的生命周期：
+	1. ﻿﻿实例化--->AService普通对象--->map.put("AService",AService普通对象）
+	2. ﻿﻿﻿填充bService--->单例池Map--->创建BService
+		BService的Bean的生命周期：
+		1. ﻿﻿实例化--->普通对象
+		2. ﻿﻿填充aService--->单例池Map--->map--->AService普通对象
+		3. ﻿﻿填充其他属性
+		4. ﻿﻿﻿做一些其他的事情（AOP）---> AService的代理对象
+		5. ﻿﻿﻿添加到单例池
+	4. ﻿﻿填充其他属性
+	5. ﻿﻿﻿做一些其他的事情
+	6. ﻿﻿添加到单例池
+
+>出现问题：注入bService的AService属性是AService的普通对象，而加入单例池是AService的代理对象
+
+解决方法：
+未出现循环依赖的bean不提前进行AOP，只有出现循环依赖的bean提前进行AOP
+
+加入﻿creatingSet存放正在进行初始化的bean
+	1. ﻿﻿﻿ creatingSet<AService›
+	2. ﻿﻿实例化-->AService普通对象
+	3. ﻿﻿﻿填充bService--->单例池Map--->创建BService
+		BService的Bean的生命周期：
+		2.1 实例化-->普通对象
+		2.2 填充aService--->单例池Map--->creatingSet--->AService出现了循环依赖--->*AOP---> aService代理对象--->添加到单例池*
+		2.3 填充其他属性
+		2.4 做一些其他的事情（AOP）
+		2.5 添加到单例池
+	4. ﻿﻿填充其他属性
+	*5. ﻿﻿做一些其他的事情（AOP）--->AService代理对象
+	6. 添加到单例池*
+	7. ﻿﻿﻿creatingSet.remove<'AService'>
+
+在第2.2通过检查creatingSet判断循环依赖，决定是否提前进行AOP。
+
+>出现问题：是否应该将5、6提前到2.2斜体部分？
+
+答案：不应该在2.2斜体部分加入单例池。
+	因为存在一些潜在的问题，例如：
+		1. 此时aService普通对象还未初始化完成，代理对象创建过程中可能拿不到普通对象
+		2. 此时aService普通对象还未初始化完成，因此aService代理对象中的target属性为空或不完整。此时如果有另外一个线程使用单例池中的aService代理对象，就会出现问题。
