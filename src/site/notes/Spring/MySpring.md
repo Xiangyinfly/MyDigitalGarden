@@ -669,51 +669,204 @@ public PlatformTransactionManager transactionManager() {
 ## 循环依赖
 
 >*三级缓存(三个map)
->	singletonobjects(即单例池)
->	earlySingletonobjects
->	singletonFactories*
+>	singletonobjects(即单例池) -> 保存拥有完整生命周期的bean
+>	earlySingletonobjects -> bean被循环依赖，提前产生一个代理对象，保存到二级缓存，保证单例
+>	singletonFactories -> 打破循环，先存到三级缓存，出现循环依赖的情况下才能拿到被依赖的对象*
+
+#### 引入
 
 >背景：AService类注入了BService类属性，BService类注入了AService类属性
 
-利用一个map解决循环依赖问题：
-	AService的Bean的生命周期：
-	1. ﻿﻿实例化--->AService普通对象--->map.put("AService",AService普通对象）
-	2. ﻿﻿﻿填充bService--->单例池Map--->创建BService
-		BService的Bean的生命周期：
-		1. ﻿﻿实例化--->普通对象
-		2. ﻿﻿填充aService--->单例池Map--->map--->AService普通对象
-		3. ﻿﻿填充其他属性
-		4. ﻿﻿﻿做一些其他的事情（AOP）---> AService的代理对象
-		5. ﻿﻿﻿添加到单例池
-	4. ﻿﻿填充其他属性
-	5. ﻿﻿﻿做一些其他的事情
-	6. ﻿﻿添加到单例池
+>解决方法：利用一个map解决循环依赖问题
+
+AService的Bean的生命周期：
+1. ﻿﻿实例化--->AService普通对象--->map.put("AService",AService普通对象）
+2. ﻿﻿﻿填充bService--->单例池Map--->创建BService
+	BService的Bean的生命周期：
+	1. ﻿﻿实例化--->普通对象
+	2. ﻿﻿填充aService--->单例池Map--->map--->AService普通对象
+	3. ﻿﻿填充其他属性
+	4. ﻿﻿﻿做一些其他的事情（AOP）---> AService的代理对象
+	5. ﻿﻿﻿添加到单例池
+3. ﻿﻿填充其他属性
+4. ﻿﻿﻿做一些其他的事情
+5. ﻿﻿添加到单例池
 
 >出现问题：注入bService的AService属性是AService的普通对象，而加入单例池是AService的代理对象
 
-解决方法：
-未出现循环依赖的bean不提前进行AOP，只有出现循环依赖的bean提前进行AOP
+>解决方法：未出现循环依赖的bean不提前进行AOP，只有出现循环依赖的bean提前进行AOP。加入﻿creatingSet存放正在进行初始化的bean，在第2.2通过检查creatingSet判断循环依赖，决定是否提前进行AOP。
 
-加入﻿creatingSet存放正在进行初始化的bean
-	1. ﻿﻿﻿ creatingSet<AService›
-	2. ﻿﻿实例化-->AService普通对象
-	3. ﻿﻿﻿填充bService--->单例池Map--->创建BService
-		BService的Bean的生命周期：
-		2.1 实例化-->普通对象
-		2.2 填充aService--->单例池Map--->creatingSet--->AService出现了循环依赖--->*AOP---> aService代理对象--->添加到单例池*
-		2.3 填充其他属性
-		2.4 做一些其他的事情（AOP）
-		2.5 添加到单例池
-	4. ﻿﻿填充其他属性
-	*5. ﻿﻿做一些其他的事情（AOP）--->AService代理对象
-	6. 添加到单例池*
-	7. ﻿﻿﻿creatingSet.remove<'AService'>
-
-在第2.2通过检查creatingSet判断循环依赖，决定是否提前进行AOP。
+1. ﻿﻿﻿ creatingSet<AService›
+2. ﻿﻿实例化-->AService普通对象
+3. ﻿﻿﻿填充bService--->单例池Map--->创建BService
+	BService的Bean的生命周期：
+	2.1 实例化-->普通对象
+	2.2 填充aService--->单例池Map--->creatingSet--->AService出现了循环依赖--->*AOP---> aService代理对象--->添加到单例池*
+	2.3 填充其他属性
+	2.4 做一些其他的事情（AOP）
+	2.5 添加到单例池
+4. ﻿﻿填充其他属性
+*5. ﻿﻿做一些其他的事情（AOP）--->AService代理对象
+6. 添加到单例池*
+7. ﻿﻿﻿creatingSet.remove<'AService'>
 
 >出现问题：是否应该将5、6提前到2.2斜体部分？
 
-答案：不应该在2.2斜体部分加入单例池。
-	因为存在一些潜在的问题，例如：
+>答案：不应该在2.2斜体部分加入单例池。
+		因为存在一些潜在的问题，例如：
 		1. 此时aService普通对象还未初始化完成，代理对象创建过程中可能拿不到普通对象
 		2. 此时aService普通对象还未初始化完成，因此aService代理对象中的target属性为空或不完整。此时如果有另外一个线程使用单例池中的aService代理对象，就会出现问题。
+
+#### 二级缓存
+
+>出现问题：
+>背景：如果aService依赖bService和cService，而bService和cService都依赖aService，那bService和cService在初始化的时候都需要创建aService的代理对象，与单例模式产生矛盾。
+
+>解决方法：利用第二级缓存earlySingletonobjects，在b需要a的时候创建a的代理对象并将其加入earlySingletonobjects，c在需要a的时候直接从二级缓存里面拿。
+
+*二级缓存的作用：存储出现循环依赖问题时还未完成完整生命周期的早期的bean对象，保持单例性*
+
+>问题：什么时候将aService代理对象加入单例池？
+
+>答案：在aService填充完所有属性并进行完其他的事情（如AOP）之后，earlySingletonobjects.get(AService)得到a的代理对象，加入单例池
+
+>问题：第四步“填充其他属性”是aService普通对象还是代理对象？
+
+>答案：普通对象。代理对象存在的意义仅仅是执行切面逻辑。
+
+
+#### 三级缓存
+
+*三级缓存的作用是打破循环。*
+
+singletonFactories里存放的是(beanName，lambda表达式)：
+```
+singletonFactories.put('AService',()-> getEarlyBeanReference(beanName,mbd,AService普通对象))
+```
+
+源码：
+```
+//判断是否是单例，是否支持循环依赖（默认true），是否正在被创建
+boolean earlySingletonExposure = (mbd.isSingleton() && this.allowCircularReferences && isSingletonCurrentlyInCreation(beanName));
+
+//如果都是
+if(earlySingletonExposure) {
+	if(logger.isTraceEnabled()) {
+		Logger.trace("Eagerly caching bean '" + beanName + "'to allow for resolving potential circular references");
+	}
+	//加入三级缓存
+	addSingletonFactory(beanName,() -> getEarlyBeanReference(beanName, mbd,
+bean));
+}
+```
+
+如果在一二级缓存里面都没找到，就去第三级缓存找，执行()-> getEarlyBeanReference(beanName,mbd,AService普通对象)。
+如果该bean需要进行AOP，那执行的结果是进行AOP，创建代理对象。
+如果不需要，那执行的结果是返回普通对象。
+最后将代理/普通对象放入二级缓存。
+
+
+a填充b的属性时，会调用getSingleton方法：
+```
+protected Object getSingleton(String beanName, boolean allowEarlyReference) {
+	Object singletonobject = this. singletonobjects.get (beanName);
+	if(singletonObject == null &d isSingletonCurrentlyInCreation(beanName)) {//当前索要的对象为空且正在创建中，即出现了循环依赖
+		singletonObject = this. earlySingletonobjects. get (beanName);
+		if (singletonobject == null && allowEarlyReference) {
+			synchronized (this. singletonObjects) {
+			// Consistent creation of early reference within full singleton lock
+				singletonobject = this. singletonobjects.get (beanName);
+				if (singletonobject == null) {
+					singletonobject = this. earlySingletonobjects.get (beanName);
+						if (singletonObject == null) {//二级缓存没有
+							ObjectFactory<?> singletonFactory = this.singletonFactories.get(beanName);
+								if (singletonFactory != null) {//去三级缓存找
+									singletonobject = singletonFactory.getobject;
+									this. earlySingletonobjects. put (beanName, singLetonobject);//加入二级缓存中
+									this. singletonFactories. remove (beanName);//从三级缓存中移除，即移除lambda表达式
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return singletonObject;
+}
+```
+
+> 为什么要从三级缓存中移除？
+
+>因为对象是单例的，lambda表达式（()-> getEarlyBeanReference(beanName,mbd,AService普通对象)）只需要执行一次，保证单例。
+>同理，当需要去三级缓存中存的时候，二级缓存中也会执行移除
+>例如：
+```
+protected void addSingletonFactory(String beanName, ObjectFactory<?> singletonFactory) {
+	Assert. notNull(singletonFactory, "Singleton factory must not be null");
+	synchronized (this.singletonObjects) {
+		if (!this. singletonobjects. containsKey(beanName)) {
+			this. singletonFactories put(beanName, singletonFactory);
+			this.earlySingleton0bjects.remove(beanName);
+			this.registeredSingletons.add (beanName);
+		}
+	}
+}
+```
+
+>*5、6步之间还会调用getSingleton方法，从二级缓存中拿到代理对象*
+
+
+>总结：
+>*对象创建时，先存在三级缓存中，在出现循环依赖的时候去三级缓存取，然后执行取到的lambda表达式并执行，进行AOP得到代理对象，然后将代理对象存进二级缓存，然后执行接下来的创建步骤，创建完成后放入一级缓存。*
+
+
+#### Map:earlyProxyReferences
+
+>如果在2.2提前进行AOP，那原本该进行AOP的时候（第5步）如何进行？
+
+```
+@Override
+public Object postProcessAfterInitialization (Nullable Object bean, String beanName) {
+	if (bean != null) {
+		Object cacheKey = getCacheKey (bean. getClass), beanName);
+		if (this.earlyProxyReferences.remove(cacheKey) != bean) {
+			return wrapIfNecessary(bean, beanName, cacheKey);
+		}
+	}
+	return bean;
+｝
+@Override
+public Object getEarlyBeanReference(Object bean, String beanName) {
+	Object cacheKey = getCacheKey(bean. getClass), beanName);
+	this.earlyProxyReferences.put(cacheKey, bean);
+	return wrapIfNecessary(bean, beanName, cachekey);
+}
+```
+
+>通过一个map "earlyProxyReferences"来区分bean是否进行过AOP。
+>getEarlyBeanReference方法是lambda表达式调用的方法。如果提前进行AOP，该方法被调用，对该bean产生一个cacheKey放入earlyProxyReferences中，并且调用wrapIfNecessary方法。
+>postProcessAfterInitialization是正常AOP调用的方法。if的意义在于判断earlyProxyReferences中是否有该bean的cacheKey。如果有，就直接返回*普通对象（此处不必着急返回代理对象，因为5、6步之间还会调用getSingleton方法，从二级缓存中拿到代理对象）*；如果没有，即this.earlyProxyReferences. remove(cacheKey) == null，就调用wrapIfNecessary方法。
+
+
+#### @Lazy
+
+>问题：如果在a构造方法里（a初始化的时候）加入this.bService = bService，则根本创建不出来a的普通对象，因此spring解决不了循环依赖问题。
+
+```
+@Component
+public class AService {
+	private BService bService;
+	
+	@Lazy
+	public AService(BService bService) {
+		this.bService = bService;
+	}
+	public void test() {
+		bService.toString();
+	}
+	...
+```
+
+>解决方法：加上@Lazy注解。加注解后，在创建a的bean的时候，会创建一个b的代理对象注入a，不会出现循环依赖问题。等到真正调用关于b的方法（例如test方法）的时候，b才会真正被创建出来。
+>*也可以解决@Async报错问题。
