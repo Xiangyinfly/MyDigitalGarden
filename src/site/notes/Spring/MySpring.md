@@ -41,6 +41,8 @@ public @interface Autowired {
 
 ## 建立BeanDefinition
 
+*BeanDefinition与Bean的关系, 就好比类与对象的关系. 类在spring的数据结构就是BeanDefinition.*
+
 ```
 public class BeanDefinition {  
     private Class type;  
@@ -74,7 +76,7 @@ public class MyApplicationContext {
   
     public MyApplicationContext(Class configClass) {  
         this.configClass = configClass;  
-  
+        
         //扫描类的注解  
         if (configClass.isAnnotationPresent(ComponentScan.class)) {  
             ComponentScan componentScanAnnotation = (ComponentScan) configClass.getAnnotation(ComponentScan.class);  
