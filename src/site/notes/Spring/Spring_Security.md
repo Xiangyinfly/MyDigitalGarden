@@ -26,7 +26,6 @@ public interface SecurityBuilder<O> {
 }
 ```
 
-
 ## HttpSecurity
 
 ![Pasted image 20231105144050.png|undefined](/img/user/Spring/assets/Pasted%20image%2020231105144050.png)
