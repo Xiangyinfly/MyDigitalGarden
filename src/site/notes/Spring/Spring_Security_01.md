@@ -209,6 +209,34 @@ public FilterChainProxy(List<SecurityFilterChain> filterChains) {
 
 其中doFilter方法 -> doFilterInternal方法 
 ```Java
+@Override  
+public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)  
+       throws IOException, ServletException {  
+    boolean clearContext = request.getAttribute(FILTER_APPLIED) == null;  
+    if (!clearContext) {  
+       doFilterInternal(request, response, chain);  
+       return;  
+    }  
+    try {  
+       request.setAttribute(FILTER_APPLIED, Boolean.TRUE);  
+       doFilterInternal(request, response, chain);  
+    }  
+    catch (Exception ex) {  
+       Throwable[] causeChain = this.throwableAnalyzer.determineCauseChain(ex);  
+       Throwable requestRejectedException = this.throwableAnalyzer  
+          .getFirstThrowableOfType(RequestRejectedException.class, causeChain);  
+       if (!(requestRejectedException instanceof RequestRejectedException)) {  
+          throw ex;  
+       }  
+       this.requestRejectedHandler.handle((HttpServletRequest) request, (HttpServletResponse) response,  
+             (RequestRejectedException) requestRejectedException);  
+    }  
+    finally {  
+       this.securityContextHolderStrategy.clearContext();  
+       request.removeAttribute(FILTER_APPLIED);  
+    }  
+}
+
 private void doFilterInternal(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {  //FilterChain：最顶层的filter，例如tomcat中的
     FirewalledRequest firewallRequest = this.firewall.getFirewalledRequest((HttpServletRequest) request);  
     HttpServletResponse firewallResponse = this.firewall.getFirewalledResponse((HttpServletResponse) response); 
@@ -1197,6 +1225,7 @@ protected final UserDetails retrieveUser(String username, UsernamePasswordAuthen
 
 ##### prepareTimingAttackProtection()和mitigateAgainstTimingAttack(authentication)
 用于干扰计时攻击，防止通过反应时间长短来判断用户名是否存在
+计时攻击：密码匹配需要一个明显的耗时，攻击者可以通过耗时长短来得到一些测试信息。
 #### 流程
 先从缓存中获取，如果获取不到就调用retrieveUser方法获取，然后进行一系列检验，最后包装为createSuccessAuthentication对象返回
 
@@ -1651,19 +1680,19 @@ private String getOrDeducePassword(SecurityProperties.User user, PasswordEncoder
 
 ### 登录过程
 
-进入[[Spring/Spring_Security_01#AbstractUserDetailsAuthenticationProvider\|AbstractUserDetailsAuthenticationProvider]]的doFilter方法
+进入[[Spring/Spring_Security_01#父类为AbstractAuthenticationProcessingFilter\|AbstractAuthenticationProcessingFilter]]的[[Spring/Spring_Security_01#父类的doFilter方法\|doFilter]]方法
 	前端登录成功后会调用[[Spring/Spring_Security_01#UsernamePasswordAuthenticationFilter\|UsernamePasswordAuthenticationFilter]]的[[Spring/Spring_Security_01#2️⃣attemptAuthentication\|attemptAuthentication]]方法
-	其中的this.getAuthenticationManager()是一个providerManager，但是该providerManage的providers属性中只有一个AnonymousAuthenticationProvider
-	该providerManage的parent属性中的providers中有[[Spring/Spring_Security_01#DaoAuthenticationProvider\|DaoAuthenticationProvider]]
+	其中的this.getAuthenticationManager()是一个providerManager，但是该providerManage的providers属性中只有一个AnonymousAuthenticationProvider；而该providerManage的parent属性中的providers中有[[Spring/Spring_Security_01#DaoAuthenticationProvider\|DaoAuthenticationProvider]]
 		然后执行[[Spring/Spring_Security_01#ProviderManager\|ProviderManager]]的authenticate方法，在判断子类provider是否支持的时候发现子类的唯一的AnonymousAuthenticationProvider不支持，然后调用父类的provider，发现支持[[Spring/Spring_Security_01#DaoAuthenticationProvider\|DaoAuthenticationProvider]]
-			然后执行provider.authenticate方法，进入[[Spring/Spring_Security_01#AbstractUserDetailsAuthenticationProvider\|AbstractUserDetailsAuthenticationProvider]]类
+			然后执行provider.[[Spring/Spring_Security_01#🌟authenticate方法\|authenticate]]方法，进入[[Spring/Spring_Security_01#AbstractUserDetailsAuthenticationProvider\|AbstractUserDetailsAuthenticationProvider]]类
 				然后进入执行[[Spring/Spring_Security_01#6️⃣retrieveUser🌟\|retrieveUser]]方法，进入[[Spring/Spring_Security_01#DaoAuthenticationProvider\|DaoAuthenticationProvider]]类，
 				其中的this.getUserDetailsService为inMemoryUserDetailsManager
 			执行到[[Spring/Spring_Security_01#AbstractUserDetailsAuthenticationProvider\|AbstractUserDetailsAuthenticationProvider]]的[[Spring/Spring_Security_01#🌟authenticate方法\|authenticate]]方法的return createSuccessAuthentication语句时
-				执行createSuccessAuthentication方法，进入[[Spring/Spring_Security_01#DaoAuthenticationProvider\|DaoAuthenticationProvider]]类
+				执行方法createSuccessAuthentication，进入[[Spring/Spring_Security_01#DaoAuthenticationProvider\|DaoAuthenticationProvider]]类
 				执行到return super.createSuccessAuthentication的时候
-					进入父类[[Spring/Spring_Security_01#AbstractUserDetailsAuthenticationProvider\|AbstractUserDetailsAuthenticationProvider]]的createSuccessAuthentication方法
+					进入父类[[Spring/Spring_Security_01#AbstractUserDetailsAuthenticationProvider\|AbstractUserDetailsAuthenticationProvider]]的[[Spring/Spring_Security_01#5️⃣createSuccessAuthentication\|createSuccessAuthentication]]方法
 					执行UsernamePasswordAuthenticationToken.authenticated方法得到UsernamePasswordAuthenticationToken
-执行完attemptAuthentication方法，返回认证成功的[[Spring/Spring_Security_01#Authentication\|Authentication]]到[[Spring/Spring_Security_01#AbstractUserDetailsAuthenticationProvider\|AbstractUserDetailsAuthenticationProvider]]，继续完成doFilter方法
+			*......一系列返回*
+执行完attemptAuthentication方法，返回认证成功的[[Spring/Spring_Security_01#Authentication\|Authentication]]到[[Spring/Spring_Security_01#父类为AbstractAuthenticationProcessingFilter\|AbstractAuthenticationProcessingFilter]]，继续完成[[Spring/Spring_Security_01#父类的doFilter方法\|doFilter]]方法
 	调用successfulAuthentication方法
 		调用onAuthenticationSuccess方法，进入SavedRequestAwareAuthenticationSuccessHandler类，进行重定向
