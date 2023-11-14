@@ -1598,3 +1598,512 @@ public interface HeaderWriter {
     void writeHeaders(HttpServletRequest request, HttpServletResponse response);  
 }
 ```
+
+## LogoutFilter
+
+```Java
+public class LogoutFilter extends GenericFilterBean {  
+  
+    private SecurityContextHolderStrategy securityContextHolderStrategy = SecurityContextHolder  
+       .getContextHolderStrategy();  
+  
+    private RequestMatcher logoutRequestMatcher;  
+
+	//处理登出时的逻辑
+    private final LogoutHandler handler;  
+	//处理登出后的逻辑，比如在里面的onLogoutSuccess方法通过参数response响应一个登出成功的状态
+    private final LogoutSuccessHandler logoutSuccessHandler;
+
+
+	......
+
+	@Override  
+	public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)  
+	       throws IOException, ServletException {  
+	    doFilter((HttpServletRequest) request, (HttpServletResponse) response, chain);  
+	}  
+	  
+	private void doFilter(HttpServletRequest request, HttpServletResponse response, FilterChain chain)  
+	       throws IOException, ServletException {  
+	    if (requiresLogout(request, response)) {  
+	       Authentication auth = this.securityContextHolderStrategy.getContext().getAuthentication();  
+	       if (this.logger.isDebugEnabled()) {  
+	          this.logger.debug(LogMessage.format("Logging out [%s]", auth));  
+	       }  
+	       //把具体逻辑实现交给handler
+	       this.handler.logout(request, response, auth);  
+	       this.logoutSuccessHandler.onLogoutSuccess(request, response, auth);  
+	       return;  
+	    }  
+	    chain.doFilter(request, response);  
+	}
+
+	......
+```
+
+## RequestCacheAwareFilter
+
+一般通过前端来实现。前后端分离项目不会用到该过滤器
+
+作用：复原认证请求之前的信息，比如登录失败后重定向到登录页面，登录成功后复原回上次登录成功时访问的页面
+```Java
+public class RequestCacheAwareFilter extends GenericFilterBean {  
+	//缓存请求信息的接口
+    private RequestCache requestCache;  
+  
+    public RequestCacheAwareFilter() {  
+       this(new HttpSessionRequestCache());  
+    }  
+  
+    public RequestCacheAwareFilter(RequestCache requestCache) {  
+       Assert.notNull(requestCache, "requestCache cannot be null");  
+       this.requestCache = requestCache;  
+    }  
+  
+    @Override  
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)  
+          throws IOException, ServletException {  
+       HttpServletRequest wrappedSavedRequest = this.requestCache.getMatchingRequest((HttpServletRequest) request,  
+             (HttpServletResponse) response);  
+       chain.doFilter((wrappedSavedRequest != null) ? wrappedSavedRequest : request, response);  
+    }  
+  
+}
+```
+
+## SecurityContextHolderAwareRequestFilter
+
+实现了HttpServletRequest中一些标准的获取认证信息的方法，通过包装器的模式来实现
+
+### doFilter方法
+```Java 
+@Override  
+public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain)  
+       throws IOException, ServletException {  
+    chain.doFilter(this.requestFactory.create((HttpServletRequest) req, (HttpServletResponse) res), res);  
+}
+```
+
+doFilter方法中替换了req为this.requestFactory.create((HttpServletRequest) req, (HttpServletResponse) res)
+
+#### create方法
+
+定义在HttpServletRequestFactory接口
+```Java
+interface HttpServletRequestFactory {  
+	HttpServletRequest create(HttpServletRequest request, HttpServletResponse response);  
+  
+}
+```
+
+该方法在HttpServlet3RequestFactory类中有唯一实现
+```Java
+@Override  
+public HttpServletRequest create(HttpServletRequest request, HttpServletResponse response) { 
+	//1️⃣一个wapper包装类
+    Servlet3SecurityContextHolderAwareRequestWrapper wrapper = new Servlet3SecurityContextHolderAwareRequestWrapper(  
+          request, this.rolePrefix, response);  
+    wrapper.setSecurityContextHolderStrategy(this.securityContextHolderStrategy);  
+    return wrapper;  
+}
+```
+
+##### 1️⃣Servlet3SecurityContextHolderAwareRequestWrapper
+
+继承了SecurityContextHolderAwareRequestWrapper
+
+SecurityContextHolderAwareRequestWrapper包装器包装了HttpServletRequest接口中的一些方法，如：
+```Java
+@Override  
+public String getRemoteUser() {  
+    Authentication auth = getAuthentication();  
+    if ((auth == null) || (auth.getPrincipal() == null)) {  
+       return null;  
+    }  
+    if (auth.getPrincipal() instanceof UserDetails) {  
+       return ((UserDetails) auth.getPrincipal()).getUsername();  
+    }  
+    if (auth instanceof AbstractAuthenticationToken) {  
+       return auth.getName();  
+    }  
+    return auth.getPrincipal().toString();  
+}  
+  
+@Override  
+public Principal getUserPrincipal() {  
+    Authentication auth = getAuthentication();  
+    if ((auth == null) || (auth.getPrincipal() == null)) {  
+       return null;  
+    }  
+    return auth;  
+}  
+  
+private boolean isGranted(String role) {  
+    Authentication auth = getAuthentication();  
+    if (this.rolePrefix != null && role != null && !role.startsWith(this.rolePrefix)) {  
+       role = this.rolePrefix + role;  
+    }  
+    if ((auth == null) || (auth.getPrincipal() == null)) {  
+       return false;  
+    }  
+    Collection<? extends GrantedAuthority> authorities = auth.getAuthorities();  
+    if (authorities == null) {  
+       return false;  
+    }  
+    for (GrantedAuthority grantedAuthority : authorities) {  
+       if (role.equals(grantedAuthority.getAuthority())) {  
+          return true;  
+       }  
+    }  
+    return false;  
+}
+```
+
+## AnonymousAuthenticationFilter
+
+```Java
+@Override  
+public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain)  
+       throws IOException, ServletException {  
+    Supplier<SecurityContext> deferredContext = this.securityContextHolderStrategy.getDeferredContext();  
+    this.securityContextHolderStrategy  
+       .setDeferredContext(defaultWithAnonymous((HttpServletRequest) req, deferredContext));  
+    chain.doFilter(req, res);  
+}  
+  
+private Supplier<SecurityContext> defaultWithAnonymous(HttpServletRequest request,  
+       Supplier<SecurityContext> currentDeferredContext) {  
+    return SingletonSupplier.of(() -> {  
+       SecurityContext currentContext = currentDeferredContext.get();  
+       return defaultWithAnonymous(request, currentContext);  
+    });  
+}  
+  
+private SecurityContext defaultWithAnonymous(HttpServletRequest request, SecurityContext currentContext) {  
+    Authentication currentAuthentication = currentContext.getAuthentication();  
+    //1️⃣如果Authentication==null，就createAuthentication方法创建一个
+    if (currentAuthentication == null) {  
+       Authentication anonymous = createAuthentication(request);  
+       if (this.logger.isTraceEnabled()) {  
+          this.logger.trace(LogMessage.of(() -> "Set SecurityContextHolder to " + anonymous));  
+       }  
+       else {  
+          this.logger.debug("Set SecurityContextHolder to anonymous SecurityContext");  
+       }  
+       SecurityContext anonymousContext = this.securityContextHolderStrategy.createEmptyContext();  
+       anonymousContext.setAuthentication(anonymous);  
+       return anonymousContext;  
+    }  
+    else {  
+       if (this.logger.isTraceEnabled()) {  
+          this.logger.trace(LogMessage.of(() -> "Did not set SecurityContextHolder since already authenticated "  
+                + currentAuthentication));  
+       }  
+    }  
+    return currentContext;  
+} 
+```
+
+### 1️⃣核心方法createAuthentication
+
+```Java
+protected Authentication createAuthentication(HttpServletRequest request) {  
+    AnonymousAuthenticationToken token = new AnonymousAuthenticationToken(this.key, this.principal,  
+          this.authorities);  
+    token.setDetails(this.authenticationDetailsSource.buildDetails(request));  
+    return token;  
+}
+```
+
+### 匿名、认证和完全认证
+
+AnonymousAuthenticationToken为匿名认证
+用户通过rememberMe来进行认证登录为认证；用户通过用户名和密码进行认证登录为完全认证
+
+
+## ExceptionTranslationFilter
+
+### doFilter方法
+```Java
+@Override  
+public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)  
+       throws IOException, ServletException {  
+    doFilter((HttpServletRequest) request, (HttpServletResponse) response, chain);  
+}  
+  
+private void doFilter(HttpServletRequest request, HttpServletResponse response, FilterChain chain)  
+       throws IOException, ServletException {  
+    try {  
+    //该类只会捕获异常并处理，不会干涉逻辑
+       chain.doFilter(request, response);  
+    }  
+    catch (IOException ex) {  
+       throw ex;  
+    }  
+    catch (Exception ex) {  
+       // Try to extract a SpringSecurityException from the stacktrace  
+       Throwable[] causeChain = this.throwableAnalyzer.determineCauseChain(ex);  
+       //用RuntimeException来接受，RuntimeException是这些异常的父类
+       RuntimeException securityException = (AuthenticationException) this.throwableAnalyzer  
+          .getFirstThrowableOfType(AuthenticationException.class, causeChain);  
+       if (securityException == null) {  
+          securityException = (AccessDeniedException) this.throwableAnalyzer  
+             .getFirstThrowableOfType(AccessDeniedException.class, causeChain);  
+       }  
+       if (securityException == null) {  //如果不是上述两种异常，直接再次抛出
+          rethrow(ex);  
+       }  
+       if (response.isCommitted()) {  //如果已经提交，直接抛异常
+          throw new ServletException("Unable to handle the Spring Security Exception "  
+                + "because the response is already committed.", ex);  
+       }  
+       //真正处理上述两种异常的方法
+       handleSpringSecurityException(request, response, chain, securityException);  
+    }  
+}
+```
+
+#### handleSpringSecurityException方法
+```Java
+private void handleSpringSecurityException(HttpServletRequest request, HttpServletResponse response,FilterChain chain, RuntimeException exception) throws IOException, ServletException {  
+    if (exception instanceof AuthenticationException) {  //1️⃣如果是AuthenticationException
+       handleAuthenticationException(request, response, chain, (AuthenticationException) exception);  
+    }  
+    else if (exception instanceof AccessDeniedException) {  //2️⃣如果是AccessDeniedException
+       handleAccessDeniedException(request, response, chain, (AccessDeniedException) exception);  
+    }  
+}  
+```
+
+
+##### 1️⃣如果是AuthenticationException
+
+```Java
+//1️⃣
+private void handleAuthenticationException(HttpServletRequest request, HttpServletResponse response, FilterChain chain, AuthenticationException exception) throws ServletException, IOException {  
+    this.logger.trace("Sending to authentication entry point since authentication failed", exception);  
+    //3️⃣
+    sendStartAuthentication(request, response, chain, exception);  
+}  
+```
+
+###### 3️⃣sendStartAuthentication
+```Java
+protected void sendStartAuthentication(HttpServletRequest request, HttpServletResponse response, FilterChain chain,  
+       AuthenticationException reason) throws ServletException, IOException {  
+    // SEC-112: Clear the SecurityContextHolder's Authentication, as the  
+    // existing Authentication is no longer considered valid    
+    SecurityContext context = this.securityContextHolderStrategy.createEmptyContext();  
+    this.securityContextHolderStrategy.setContext(context);  
+    //保存下来request，因为认证的时候往往会重定向到其他url
+    this.requestCache.saveRequest(request, response);  
+    this.authenticationEntryPoint.commence(request, response, reason);  
+}
+```
+
+关于this.[[Spring/Spring_Security_02#AuthenticationEntryPoint\|authenticationEntryPoint]].commence：进行跳转并认证
+
+##### 2️⃣如果是AccessDeniedException
+
+```Java
+//2️⃣
+private void handleAccessDeniedException(HttpServletRequest request, HttpServletResponse response, FilterChain chain, AccessDeniedException exception) throws ServletException, IOException {  
+    Authentication authentication = this.securityContextHolderStrategy.getContext().getAuthentication();  
+    boolean isAnonymous = this.authenticationTrustResolver.isAnonymous(authentication);  
+    //如果是匿名token或者是rememberMe的token，就直接调用sendStartAuthentication（见3️⃣）进行跳转到认证入口
+    if (isAnonymous || this.authenticationTrustResolver.isRememberMe(authentication)) {  
+       if (logger.isTraceEnabled()) {  
+          logger.trace(LogMessage.format("Sending %s to authentication entry point since access is denied", authentication), exception);  
+       }  
+       sendStartAuthentication(request, response, chain, new InsufficientAuthenticationException(         this.messages.getMessage("ExceptionTranslationFilter.insufficientAuthentication", "Full authentication is required to access this resource")));  
+    }  
+    else {  //如果不是，则为访问被拒绝403，权限不够
+       if (logger.isTraceEnabled()) {  
+          logger.trace(  
+                LogMessage.format("Sending %s to access denied handler since access is denied", authentication),  
+                exception);  
+       }  
+       //4️⃣调用accessDeniedHandler.handle方法
+       this.accessDeniedHandler.handle(request, response, exception);  
+    }  
+}
+```
+
+[[Spring/Spring_Security_02#AccessDeniedHandler\|AccessDeniedHandler]]：访问被拒绝的处理器
+
+
+## AuthenticationEntryPoint
+
+认证的入口。
+即在没有认证的情况下，直接将页面转到认证页面或者返回未认证的信息并让前端转到认证页面。
+
+```Java
+public interface AuthenticationEntryPoint {  
+	void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException) throws IOException, ServletException;  
+}
+```
+
+在前后端分离的项目中，commence方法更多的是返回一段json到前端，告诉前端该用户没有认证，前端实现重定向到认证界面。
+
+## AccessDeniedHandler
+
+```Java
+public interface AccessDeniedHandler {  
+    void handle(HttpServletRequest request, HttpServletResponse response, AccessDeniedException accessDeniedException) throws IOException, ServletException;  
+  
+}
+```
+
+一般情况下自己实现
+前后端分离的项目一般回返回一个json，提示没有权限
+
+
+## DefaultSecurityFilterChain中filter注入的时机
+
+我们在config类中只配置了
+```Java
+@Bean  
+public DefaultSecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {  
+    http.formLogin();  
+    return http.build();  
+}
+```
+那DefaultSecurityFilterChain中这么多filter是什么时候加进来的？
+
+### HttpSecurityConfiguration
+
+```Java
+@Bean(HTTPSECURITY_BEAN_NAME)  
+@Scope("prototype")  
+HttpSecurity httpSecurity() throws Exception {  
+    LazyPasswordEncoder passwordEncoder = new LazyPasswordEncoder(this.context);  
+    AuthenticationManagerBuilder authenticationBuilder = new DefaultPasswordEncoderAuthenticationManagerBuilder(  
+          this.objectPostProcessor, passwordEncoder);  
+    authenticationBuilder.parentAuthenticationManager(authenticationManager());  
+    authenticationBuilder.authenticationEventPublisher(getAuthenticationEventPublisher());  
+    HttpSecurity http = new HttpSecurity(this.objectPostProcessor, authenticationBuilder, createSharedObjects());  //createSharedObjects()方法中把ApplicationContext放进了sharedObjects map
+    WebAsyncManagerIntegrationFilter webAsyncManagerIntegrationFilter = new WebAsyncManagerIntegrationFilter();  
+    webAsyncManagerIntegrationFilter.setSecurityContextHolderStrategy(this.securityContextHolderStrategy);  
+    // @formatter:off  
+    //默认filter在这个地方配置
+    //如果不需要这些默认配置，要在config类中手动禁用
+    http  
+       .csrf(withDefaults())  
+       .addFilter(webAsyncManagerIntegrationFilter)  
+       .exceptionHandling(withDefaults())  
+       .headers(withDefaults())  
+       .sessionManagement(withDefaults())  
+       .securityContext(withDefaults())  
+       .requestCache(withDefaults())  
+       .anonymous(withDefaults())  
+       .servletApi(withDefaults())  
+       .apply(new DefaultLoginPageConfigurer<>());  
+    http.logout(withDefaults());  
+    // @formatter:on  
+    applyDefaultConfigurers(http); //与sringboot相关的加载的一些
+    return http;  
+}
+
+
+private void applyDefaultConfigurers(HttpSecurity http) throws Exception {  
+    ClassLoader classLoader = this.context.getClassLoader();  
+    List<AbstractHttpConfigurer> defaultHttpConfigurers = SpringFactoriesLoader  
+       .loadFactories(AbstractHttpConfigurer.class, classLoader);  
+    for (AbstractHttpConfigurer configurer : defaultHttpConfigurers) {  
+       http.apply(configurer);  
+    }  
+}
+```
+
+DefaultSecurityFilterChain在WebSecurityConfiguration中被使用 
+### WebSecurityConfiguration
+
+维护了securityFilterChains属性，并通过set方法注入
+```Java
+private List<SecurityFilterChain> securityFilterChains = Collections.emptyList();
+```
+
+```Java
+@Bean(name = AbstractSecurityWebApplicationInitializer.DEFAULT_FILTER_NAME)  
+public Filter springSecurityFilterChain() throws Exception {  
+    boolean hasFilterChain = !this.securityFilterChains.isEmpty();  
+    if (!hasFilterChain) {  
+       this.webSecurity.addSecurityFilterChainBuilder(() -> {  
+          this.httpSecurity.authorizeHttpRequests((authorize) -> authorize.anyRequest().authenticated());  
+          this.httpSecurity.formLogin(Customizer.withDefaults());  
+          this.httpSecurity.httpBasic(Customizer.withDefaults());  
+          return this.httpSecurity.build();  
+       });  
+    }  
+    for (SecurityFilterChain securityFilterChain : this.securityFilterChains) {  
+       this.webSecurity.addSecurityFilterChainBuilder(() -> securityFilterChain);  
+    }  
+    for (WebSecurityCustomizer customizer : this.webSecurityCustomizers) {  
+       customizer.customize(this.webSecurity);  
+    }  
+    return this.webSecurity.build();  //此处调用了WebSecurity的build方法
+}
+```
+
+生成一个Filter，即一个FilterChainProxy
+DEFAULT_FILTER_NAME的值为springSecurityFilterChain，即其beanName
+这个filter被DelegatingFilterProxy使用
+### DelegatingFilterProxy
+
+属于包org.springframework.web.filter
+
+```Java
+@Override  
+public void doFilter(ServletRequest request, ServletResponse response, FilterChain filterChain)  
+       throws ServletException, IOException {  
+  
+    // Lazily initialize the delegate if necessary.  
+    Filter delegateToUse = this.delegate;  
+    if (delegateToUse == null) {  
+	    //双重检查锁
+       synchronized (this.delegateMonitor) {  
+          delegateToUse = this.delegate;  
+          if (delegateToUse == null) {
+	          //拿到 WebApplicationContext 
+             WebApplicationContext wac = findWebApplicationContext();  
+             if (wac == null) {  
+                throw new IllegalStateException("No WebApplicationContext found: " +  
+                      "no ContextLoaderListener or DispatcherServlet registered?");  
+             } 
+             //1️⃣通过 initDelegate方法拿到filter
+             delegateToUse = initDelegate(wac);  
+          }  
+          this.delegate = delegateToUse;  
+       }  
+    }  
+  
+    // Let the delegate perform the actual doFilter operation.  
+    invokeDelegate(delegateToUse, request, response, filterChain);  
+}
+```
+
+1️⃣initDelegate方法
+```Java
+protected Filter initDelegate(WebApplicationContext wac) throws ServletException {  
+    String targetBeanName = getTargetBeanName(); //此 TargetBeanName即springSecurityFilterChain
+    Assert.state(targetBeanName != null, "No target bean name set");  
+    //WebApplicationContext的getBean方法拿到filter
+    Filter delegate = wac.getBean(targetBeanName, Filter.class);  
+    if (isTargetFilterLifecycle()) {  
+       delegate.init(getFilterConfig());  
+    }  
+    return delegate;  
+}
+```
+
+
+DispatcherServlet是tomcat里面的最主要的servlet，在到达该servlet之前会执行一堆的filter，DelegatingFilterProxy就是其中的一个
+DelegatingFilterProxy执行的是WebSecurityConfiguration构建出的springSecurityFilterChain，即一个FilterChainProxy
+其中filterChains属性包含了一个或多个filterChain（一般只有一个），比如DefaultFilterChain。
+
+### SpringSecurity从tomcat执行下来的过程
+
+config类中在public DefaultSecurityFilterChain securityFilterChain(HttpSecurity http)方法中配置过滤器，构建成SecurityFilterChain来返回，
+在WebSecurityConfiguration中，通过@Autowired注入SecurityFilterChain，在springSecurityFilterChain方法中通过WebSecurity构建出一个FilterChainProxy，命名为springSecurityFilterChain，
+springSecurityFilterChain通过DelegatingFilterProxy添加到tomcat最原生的filter列表中，
+然后通过doFilter方法 -> invokeDelegate方法真正执行
