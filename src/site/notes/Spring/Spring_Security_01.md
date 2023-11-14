@@ -196,6 +196,8 @@ protected Filter performBuild() throws Exception {
 }
 ```
 
+
+WebSecurity的build方法由[[Spring/Spring_Security_02#WebSecurityConfiguration\|WebSecurityConfiguration]]调用
 ### FilterChainProxy
 
 ![Pasted image 20231105185837.png|undefined](/img/user/Spring/assets/Pasted%20image%2020231105185837.png)
