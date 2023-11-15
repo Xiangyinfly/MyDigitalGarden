@@ -583,7 +583,7 @@ public interface RememberMeServices {
 建议返回一个[[Spring/Spring_Security_02#RememberMeAuthenticationToken\|RememberMeAuthenticationToken]]
 
 ### 实现类
-![Pasted image 20231111225059.png|undefined](/img/user/Pasted%20image%2020231111225059.png)
+![Pasted image 20231111225059.png|undefined](/img/user/Spring/assets/Pasted%20image%2020231111225059.png)
 
 ## RememberMeAuthenticationProvider
 
@@ -790,7 +790,7 @@ protected String[] decodeCookie(String cookieValue) throws InvalidCookieExceptio
 在本类中该方法为抽象方法
 
 实现类：
-![Pasted image 20231112214932.png|undefined](/img/user/Pasted%20image%2020231112214932.png)
+![Pasted image 20231112214932.png|undefined](/img/user/Spring/assets/Pasted%20image%2020231112214932.png)
 第一个基于数据库，第二个基于内存
 
 在TokenBasedRememberMeServices中的实现：
@@ -949,7 +949,7 @@ public interface SessionAuthenticationStrategy {
 ```
 
 
-实现类有：![Pasted image 20231112222729.png|undefined](/img/user/Pasted%20image%2020231112222729.png)
+实现类有：![Pasted image 20231112222729.png|undefined](/img/user/Spring/assets/Pasted%20image%2020231112222729.png)
 
 ### 实现类RegisterSessionAuthenticationStrategy
 
@@ -1121,7 +1121,7 @@ public void onAuthentication(Authentication authentication, HttpServletRequest r
 ```
 abstract HttpSession applySessionFixation(HttpServletRequest request);
 ```
-![Pasted image 20231113111435.png|undefined](/img/user/Pasted%20image%2020231113111435.png)
+![Pasted image 20231113111435.png|undefined](/img/user/Spring/assets/Pasted%20image%2020231113111435.png)
 
 模版方法，有两个实现
 
@@ -1253,7 +1253,7 @@ public class SessionInformation implements Serializable {
 
 ### onExpiredSessionDetected方法
 
-![Pasted image 20231113113309.png|undefined](/img/user/Pasted%20image%2020231113113309.png)
+![Pasted image 20231113113309.png|undefined](/img/user/Spring/assets/Pasted%20image%2020231113113309.png)
 
 #### ResponseBodySessionInformationExpiredStrategy中的实现
 ```Java
@@ -1359,7 +1359,7 @@ private void doFilter(HttpServletRequest request, HttpServletResponse response, 
 
 ## SessionManagementConfigurer
 
-![Pasted image 20231113191906.png|undefined](/img/user/Pasted%20image%2020231113191906.png)
+![Pasted image 20231113191906.png|undefined](/img/user/Spring/assets/Pasted%20image%2020231113191906.png)
 
 重要方法：init和configure
 
@@ -1426,7 +1426,7 @@ public void configure(H http) {  //添加sessoin相关的filter
 # 一些Filter
 
 DefaultSecurityFilterChain中的filter包含：
-![Pasted image 20231113194321.png|undefined](/img/user/Pasted%20image%2020231113194321.png)
+![Pasted image 20231113194321.png|undefined](/img/user/Spring/assets/Pasted%20image%2020231113194321.png)
 
 
 ## DisableEncodeUrlFilter
@@ -1450,7 +1450,7 @@ public class DisableEncodeUrlFilter extends OncePerRequestFilter {
 new DisableEncodeUrlResponseWrapper(response)：
 该参数是一个response的包装
 
-![Pasted image 20231113195339.png|undefined](/img/user/Pasted%20image%2020231113195339.png)
+![Pasted image 20231113195339.png|undefined](/img/user/Spring/assets/Pasted%20image%2020231113195339.png)
 
 
 ```Java
@@ -2107,3 +2107,10 @@ config类中在public DefaultSecurityFilterChain securityFilterChain(HttpSecurit
 在WebSecurityConfiguration中，通过@Autowired注入SecurityFilterChain，在springSecurityFilterChain方法中通过WebSecurity构建出一个FilterChainProxy，命名为springSecurityFilterChain，
 springSecurityFilterChain通过DelegatingFilterProxy添加到tomcat最原生的filter列表中，
 然后通过doFilter方法 -> invokeDelegate方法真正执行
+
+
+# SpringSecurity顶层流程
+DelegatingFilterProxy -> FilterChainProxy -> SecurityFilterChain -> 具体的Filter
+HttpSecurityConfiguration配置了基础的HttpSecurity对象以供我们注入使用
+WebSecurityConfiguration注入了我们自己的SecurityFilterChainBean然后添加到WebSecurity中
+最终由WebSecurity构建出FilterChainProxy来执行SpringSecurity的过滤逻辑
