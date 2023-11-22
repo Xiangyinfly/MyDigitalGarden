@@ -526,3 +526,48 @@ public AuthorizeHttpRequestsConfigurer<HttpSecurity>.AuthorizationManagerRequest
 ## FilterSecurityInterceptor
 
 ![Pasted image 20231121201823.png|undefined](/img/user/Spring/assets/Pasted%20image%2020231121201823.png)
+
+### doFilter方法
+
+```Java
+@Override  
+public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)  
+       throws IOException, ServletException {  
+    invoke(new FilterInvocation(request, response, chain));  
+}
+```
+
+### invoke方法
+
+```Java
+public void invoke(FilterInvocation filterInvocation) throws IOException, ServletException {  
+    if (isApplied(filterInvocation) && this.observeOncePerRequest) {  
+       filterInvocation.getChain().doFilter(filterInvocation.getRequest(), filterInvocation.getResponse());  
+       return;  
+    }  
+    // first time this request being called, so perform security checking  
+    if (filterInvocation.getRequest() != null && this.observeOncePerRequest) {  
+       filterInvocation.getRequest().setAttribute(FILTER_APPLIED, Boolean.TRUE);  
+    }  
+    InterceptorStatusToken token = super.beforeInvocation(filterInvocation);  
+    try {  
+       filterInvocation.getChain().doFilter(filterInvocation.getRequest(), filterInvocation.getResponse());  
+    }  
+    finally {  
+       super.finallyInvocation(token);  
+    }  
+    super.afterInvocation(token, null);  
+}
+```
+
+beforeInvocation(filterInvocation)
+## FilterInvocation
+
+封装了三个属性
+```Java
+private FilterChain chain;  
+  
+private HttpServletRequest request;  
+  
+private HttpServletResponse response;
+```
