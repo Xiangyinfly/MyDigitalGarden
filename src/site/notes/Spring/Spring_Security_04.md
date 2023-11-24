@@ -571,3 +571,12 @@ private HttpServletRequest request;
   
 private HttpServletResponse response;
 ```
+
+
+
+
+
+
+
+
+使用Redis持久化时，登录一次Redis中出现两个token的原因：[[Spring/Spring_Security_02#Redis中出现两个token的原因\|原因]]
