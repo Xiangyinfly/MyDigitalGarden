@@ -186,11 +186,9 @@ final class ThreadLocalSecurityContextHolderStrategy implements SecurityContextH
 }
 ```
 
-
 ## SecurityContextRepository
 
 用于持久化SecurityContext
-
 常常自定义SecurityContextRepository，通过内存数据库来进行持久化
 
 ```Java
@@ -209,8 +207,8 @@ public interface SecurityContextRepository {
   
     boolean containsContext(HttpServletRequest request);  
   
-}```
-
+}
+```
 ## SecurityContextPersistenceFilter
 
 该类已经过时，用[[Spring/Spring_Security_02#SecurityContextHolderFilter\|SecurityContextHolderFilter]]代替
@@ -268,7 +266,11 @@ private void doFilter(HttpServletRequest request, HttpServletResponse response, 
     }  
 }
 ```
+### Redis中出现两个token的原因
 
+[[Spring/Spring_Security_02#SecurityContextConfigurer\|SecurityContextConfigurer]]的[[Spring/Spring_Security_02#configure方法\|configure]]方法中，如果requireExplicitSave为false，即启用自动保存，则会调用本类的doFilter方法：
+try中调用doFilter的时候会调用UsernamePasswordAuthenticationFilter，其父类的方法中会调用saveContext；
+而finally中又会调用一次saveContext，导致redis中出现两个token
 ## SecurityContextHolderFilter
 
 ```Java
@@ -312,7 +314,7 @@ doFilter方法中不会去保存SecurityContext
 @SuppressWarnings("unchecked")  
 public void configure(H http) {  
     SecurityContextRepository securityContextRepository = getSecurityContextRepository();  
-    if (this.requireExplicitSave) { //判断是否需要手动保存，默认false
+    if (this.requireExplicitSave) { //判断是否需要手动保存，之前默认false，现在默认true
 	    //返回true，即需要手动保存 
 	    //可以自定义ObjectPostProcess
        SecurityContextHolderFilter securityContextHolderFilter = postProcess(  
