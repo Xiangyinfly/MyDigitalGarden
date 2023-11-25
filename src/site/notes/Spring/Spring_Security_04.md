@@ -560,7 +560,171 @@ public void invoke(FilterInvocation filterInvocation) throws IOException, Servle
 }
 ```
 
-beforeInvocation(filterInvocation)
+#### [[Spring/Spring_Security_04#beforeInvocation方法\|beforeInvocation]]方法
+
+该方法的核心逻辑。调用父类[[Spring/Spring_Security_04#AbstractSecurityInterceptor\|AbstractSecurityInterceptor]]的[[Spring/Spring_Security_04#beforeInvocation方法\|beforeInvocation(filterInvocation)]]方法，返回一个InterceptorStatusToken token
+
+#### [[Spring/Spring_Security_04#finallyInvocation方法\|finallyInvocation]]方法
+#### [[Spring/Spring_Security_04#afterInvocation方法\|afterInvocation]]方法
+
+## AbstractSecurityInterceptor
+
+### beforeInvocation方法
+```Java
+//Object为安全对象
+protected InterceptorStatusToken beforeInvocation(2️⃣Object object) {  
+    Assert.notNull(object, "Object was null");  
+    //如果拿到的不是FilterInvocation，就直接报错
+    if (!getSecureObjectClass().isAssignableFrom(object.getClass())) {  
+       throw new IllegalArgumentException("Security invocation attempted for object " + object.getClass().getName()  
+             + " but AbstractSecurityInterceptor only configured to support secure objects of type: "  
+             + getSecureObjectClass());  
+    } 
+    //5️⃣   
+    Collection<ConfigAttribute> attributes = this.obtainSecurityMetadataSource().getAttributes(object);  
+    if (CollectionUtils.isEmpty(attributes)) {  
+       Assert.isTrue(!this.rejectPublicInvocations,  
+             () -> "Secure object invocation " + object  
+                   + " was denied as public invocations are not allowed via this interceptor. "  
+                   + "This indicates a configuration error because the "  
+                   + "rejectPublicInvocations property is set to 'true'");  
+       if (this.logger.isDebugEnabled()) {  
+          this.logger.debug(LogMessage.format("Authorized public object %s", object));  
+       }       publishEvent(new PublicInvocationEvent(object));  
+       return null; // no further work post-invocation  
+    }  
+    if (this.securityContextHolderStrategy.getContext().getAuthentication() == null) {  
+       credentialsNotFound(this.messages.getMessage("AbstractSecurityInterceptor.authenticationNotFound",  
+             "An Authentication object was not found in the SecurityContext"), object, attributes);  
+    }    
+    //该方法：如果Authentication就去认证一下，返回一个认证后的Authentication
+    Authentication authenticated = authenticateIfRequired();  
+    if (this.logger.isTraceEnabled()) {  
+       this.logger.trace(LogMessage.format("Authorizing %s with attributes %s", object, attributes));  
+    }    // Attempt authorization  
+    //4️⃣真正尝试授权的方法
+    attemptAuthorization(object, attributes, authenticated);  
+    if (this.logger.isDebugEnabled()) {  
+       this.logger.debug(LogMessage.format("Authorized %s with attributes %s", object, attributes));  
+    }    if (this.publishAuthorizationSuccess) {  
+       publishEvent(new AuthorizedEvent(object, attributes, authenticated));  
+    }  
+    // Attempt to run as a different user  
+    //1️⃣
+    Authentication runAs = this.runAsManager.buildRunAs(authenticated, object, attributes);  
+    if (runAs != null) { 
+	    //替换我们的context 
+       SecurityContext origCtx = this.securityContextHolderStrategy.getContext();  
+       SecurityContext newCtx = this.securityContextHolderStrategy.createEmptyContext();  
+       newCtx.setAuthentication(runAs);  
+       this.securityContextHolderStrategy.setContext(newCtx);  
+  
+       if (this.logger.isDebugEnabled()) {  
+          this.logger.debug(LogMessage.format("Switched to RunAs authentication %s", runAs));  
+       }       // need to revert to token.Authenticated post-invocation  
+       return new InterceptorStatusToken(origCtx, true, attributes, object);  
+    }    this.logger.trace("Did not switch RunAs authentication since RunAsManager returned null");  
+    // no further work post-invocation  
+    //3️⃣
+    return new InterceptorStatusToken(this.securityContextHolderStrategy.getContext(), false, attributes, object);  
+  
+}
+```
+
+#### 1️⃣RunAsManager
+可以将我们的Authentication变为RunAsUserToken（根据传入的attributes信息构建），是一种拥有特殊权限或角色信息的Authentication，可以使我们变相的去访问某些资源
+在FilterSecurityInterceptor的[[Spring/Spring_Security_04#invoke方法\|invoke]]方法的[[Spring/Spring_Security_04#finallyInvocation方法\|finallyInvocation]]中被复原回原来的Authentication
+
+#### 2️⃣Object类型参数
+Object类型参数为securityObject，即安全对象。此处为[[Spring/Spring_Security_04#FilterInvocation\|FilterInvocation]]
+
+#### 3️⃣InterceptorStatusToken
+
+```Java
+public class InterceptorStatusToken {  
+  
+    private SecurityContext securityContext;  
+  
+    private Collection<ConfigAttribute> attr;  
+	//安全对象
+    private Object secureObject;  
+	//SecurityContext如果被替换，则为true，未被替换则为false
+    private boolean contextHolderRefreshRequired;  
+    
+	......
+```
+
+#### 4️⃣attemptAuthorization方法
+```Java
+private void attemptAuthorization(Object object, Collection<ConfigAttribute> attributes,  
+       Authentication authenticated) {  
+    try {  
+	    //
+       this.accessDecisionManager.decide(authenticated, object, attributes);  
+    }    catch (AccessDeniedException ex) {  
+       if (this.logger.isTraceEnabled()) {  
+          this.logger.trace(LogMessage.format("Failed to authorize %s with attributes %s using %s", object,  
+                attributes, this.accessDecisionManager));  
+       }       else if (this.logger.isDebugEnabled()) {  
+          this.logger.debug(LogMessage.format("Failed to authorize %s with attributes %s", object, attributes));  
+       }       publishEvent(new AuthorizationFailureEvent(object, attributes, authenticated, ex));  
+       throw ex;  
+    }}
+```
+
+`this.accessDecisionManager.decide(authenticated, object, attributes);`
+
+#### 5️⃣SecurityMetadataSource
+
+`obtainSecurityMetadataSource`属性为SecurityMetadataSource类
+存储一堆安全属性
+```Java
+public interface SecurityMetadataSource extends AopInfrastructureBean {  
+	
+	//获取跟Object相关的一些配置信息
+    Collection<ConfigAttribute> getAttributes(Object object) throws IllegalArgumentException;  
+  
+    Collection<ConfigAttribute> getAllConfigAttributes();  
+
+	//传一个类过来，判断支不支持返回这个类对应的配置信息。该类为getAttributes(Object object)中object的父类
+    boolean supports(Class<?> clazz);  
+  
+}
+```
+
+关于[[Spring/Spring_Security_04#ConfigAttribute\|ConfigAttribute]]
+
+### finallyInvocation方法
+复原[[Spring/Spring_Security_04#beforeInvocation方法\|beforeInvocation]]方法中RunAsManager改变的Authentication
+
+### afterInvocation方法
+```Java
+protected Object afterInvocation(InterceptorStatusToken token, Object returnedObject) {  
+    if (token == null) { 
+	    //直接返回。在其实现类中可能会走这个分支
+       // public object  
+       return returnedObject;  
+    }    
+    //再次调用finallyInvocation
+    //原因：有可能我们自定义实现的时候不会走invoke方法中的finally，但是Spring要保证一定会调用finallyInvocation方法来复原可能在beforeInvocation被RunAsManager改变的SecurityContext，防止安全隐患
+    finallyInvocation(token); // continue to clean in this method for passivity  
+    //此时afterInvocationManager为空
+    //在注解实现权限的时候会用到，过滤器实现的时候为null
+    if (this.afterInvocationManager != null) {  
+       // Attempt after invocation handling  
+       try {  
+          returnedObject = this.afterInvocationManager.decide(token.getSecurityContext().getAuthentication(),  
+                token.getSecureObject(), token.getAttributes(), returnedObject);  
+       }       catch (AccessDeniedException ex) {  
+          publishEvent(new AuthorizationFailureEvent(token.getSecureObject(), token.getAttributes(),  
+                token.getSecurityContext().getAuthentication(), ex));  
+          throw ex;  
+       }    }    return returnedObject;  
+}
+```
+
+
+
 ## FilterInvocation
 
 封装了三个属性
@@ -571,6 +735,32 @@ private HttpServletRequest request;
   
 private HttpServletResponse response;
 ```
+
+
+## ConfigAttribute
+
+必须是一个String，且可以表明所要表达的权限的意思（就是一个权限信息）
+可以被RunAsManager, AccessDecisionManager or AccessDecisionManager delegate使用
+```Java
+public interface ConfigAttribute extends Serializable {  
+    String getAttribute();  
+}
+```
+
+实现类
+![Pasted image 20231125231350.png|undefined](/img/user/Pasted%20image%2020231125231350.png)
+
+
+过程：
+FilterSecurityInterceptor的invoke方法
+-> AbstractSecurityInterceptor的beforeInvocation方法
+-> AbstractSecurityInterceptor的attemptAuthorization方法
+-> AccessDecisionManager的decide方法
+
+
+
+
+
 
 
 
