@@ -490,8 +490,7 @@ public AuthorizeHttpRequestsConfigurer<HttpSecurity>.AuthorizationManagerRequest
 例如.antMatchers，此时返回一个AuthorizedUrl，我们可以继续调用AuthorizedUrl中的方法，
 例如hasRole，此时又回返回一个registry
 
-
-
+---
 
 # FilterSecurityInterceptor及其相关类
 
@@ -566,6 +565,28 @@ public void invoke(FilterInvocation filterInvocation) throws IOException, Servle
 
 #### [[Spring/Spring_Security_04#finallyInvocation方法\|finallyInvocation]]方法
 #### [[Spring/Spring_Security_04#afterInvocation方法\|afterInvocation]]方法
+
+#### obtainSecurityMetadataSource方法
+
+```Java
+private FilterInvocationSecurityMetadataSource securityMetadataSource;
+
+public SecurityMetadataSource obtainSecurityMetadataSource() {  
+    return this.securityMetadataSource;  
+}
+```
+
+
+##### FilterInvocationSecurityMetadataSource
+
+```Java
+public interface FilterInvocationSecurityMetadataSource extends SecurityMetadataSource {  
+  
+}
+```
+
+实现类
+![Pasted image 20231126160103.png|undefined](/img/user/Pasted%20image%2020231126160103.png)
 
 ## AbstractSecurityInterceptor
 
@@ -692,8 +713,17 @@ public interface SecurityMetadataSource extends AopInfrastructureBean {
 }
 ```
 
-关于[[Spring/Spring_Security_04#ConfigAttribute\|ConfigAttribute]]
+##### 关于[[Spring/Spring_Security_04#ConfigAttribute\|ConfigAttribute]]
 
+##### obtainSecurityMetadataSource抽象方法
+
+```Java
+public abstract SecurityMetadataSource obtainSecurityMetadataSource();
+```
+
+实现类
+![Pasted image 20231126155522.png|undefined](/img/user/Pasted%20image%2020231126155522.png)
+[[Spring/Spring_Security_04#obtainSecurityMetadataSource方法\|在FilterSecurityInterceptor中的实现]]
 ### finallyInvocation方法
 复原[[Spring/Spring_Security_04#beforeInvocation方法\|beforeInvocation]]方法中RunAsManager改变的Authentication
 
@@ -751,14 +781,260 @@ public interface ConfigAttribute extends Serializable {
 ![Pasted image 20231125231350.png|undefined](/img/user/Pasted%20image%2020231125231350.png)
 
 
-过程：
+## FilterSecurityInterceptor授权逻辑
+
 FilterSecurityInterceptor的invoke方法
 -> AbstractSecurityInterceptor的beforeInvocation方法
 -> AbstractSecurityInterceptor的attemptAuthorization方法
 -> AccessDecisionManager的decide方法
 
 
+## UrlAuthorizationConfigurer
 
+该类并没有实现init和configure方法
+### getDecisionVoters方法
+```Java
+List<AccessDecisionVoter<?>> getDecisionVoters(H http) {  
+    List<AccessDecisionVoter<?>> decisionVoters = new ArrayList<>();  
+    //根据角色投票
+    decisionVoters.add(new RoleVoter());  
+    //根据有没有认证去投票
+    decisionVoters.add(new AuthenticatedVoter());  
+    return decisionVoters;  
+}
+```
+#### RoleVoter
+```Java
+@Override  
+public boolean supports(ConfigAttribute attribute) {  
+	//不为空且以_ROLE开头
+    return (attribute.getAttribute() != null) && attribute.getAttribute().startsWith(getRolePrefix());  
+}  
+  
+@Override  
+public boolean supports(Class<?> clazz) {  
+    return true;  
+}  
+  
+@Override  
+public int vote(Authentication authentication, Object object, Collection<ConfigAttribute> attributes) {  
+    if (authentication == null) {  
+       return ACCESS_DENIED;  
+    }    
+    int result = ACCESS_ABSTAIN;  
+    Collection<? extends GrantedAuthority> authorities = extractAuthorities(authentication);  
+    for (ConfigAttribute attribute : attributes) {  
+	    //support方法判断支不支持
+       if (this.supports(attribute)) {  
+          result = ACCESS_DENIED;  
+          // Attempt to find a matching granted authority  
+          for (GrantedAuthority authority : authorities) {  
+	          //有一个属性相同返回同意
+             if (attribute.getAttribute().equals(authority.getAuthority())) {  
+                return ACCESS_GRANTED;  
+             }          
+		  }       
+       }    
+    }    
+    return result;  
+}
+```
+
+### createMetadataSource方法
+```Java
+FilterInvocationSecurityMetadataSource createMetadataSource(H http) {  
+    return new DefaultFilterInvocationSecurityMetadataSource(this.registry.createRequestMap());  
+}
+```
+
+#### 如何构建DefaultFilterInvocationSecurityMetadataSource类中的requestMap属性
+通过传入this.registry.createRequestMap()
+`private final StandardInterceptUrlRegistry registry;`
+##### StandardInterceptUrlRegistry类
+为一个注册器，注册请求和请求需要的安全配置的映射的注册器
+![Pasted image 20231126173126.png|undefined](/img/user/Pasted%20image%2020231126173126.png)
+
+
+#### 其中的DefaultFilterInvocationSecurityMetadataSource类
+
+维护了属性requestMap，key为请求匹配器，value为配置属性
+object默认为[[Spring/Spring_Security_04#FilterInvocation\|FilterInvocation]]
+```Java
+public class DefaultFilterInvocationSecurityMetadataSource implements FilterInvocationSecurityMetadataSource {  
+  
+    protected final Log logger = LogFactory.getLog(getClass());  
+  
+    private final Map<RequestMatcher, Collection<ConfigAttribute>> requestMap;  
+  
+    public DefaultFilterInvocationSecurityMetadataSource(  
+          LinkedHashMap<RequestMatcher, Collection<ConfigAttribute>> requestMap) {  
+       this.requestMap = requestMap;  
+    }  
+    @Override  
+    public Collection<ConfigAttribute> getAllConfigAttributes() {  
+       Set<ConfigAttribute> allAttributes = new HashSet<>();  
+       this.requestMap.values().forEach(allAttributes::addAll);  
+       return allAttributes;  
+    }  
+    @Override  
+    public Collection<ConfigAttribute> getAttributes(Object object) { 
+	    //本类中object默认为 FilterInvocation
+       final HttpServletRequest request = ((FilterInvocation) object).getRequest();  
+       int count = 0;  
+       for (Map.Entry<RequestMatcher, Collection<ConfigAttribute>> entry : this.requestMap.entrySet()) {
+	       //判断能不能匹配请求  
+          if (entry.getKey().matches(request)) {  
+             return entry.getValue();  
+          }          else {  
+             if (this.logger.isTraceEnabled()) {  
+                this.logger.trace(LogMessage.format("Did not match request to %s - %s (%d/%d)", entry.getKey(),  
+                      entry.getValue(), ++count, this.requestMap.size()));  
+             }          
+          }       
+        }       
+        return null;  
+    }  
+    @Override  
+    public boolean supports(Class<?> clazz) {  
+       return FilterInvocation.class.isAssignableFrom(clazz);  
+    }  
+}
+```
+### 父类AbstractInterceptUrlConfigurer
+#### configure方法
+```Java
+public void configure(H http) throws Exception {  
+	//保存对请求的权限处理的配置
+    FilterInvocationSecurityMetadataSource metadataSource = createMetadataSource(http);  
+    if (metadataSource == null) {  
+       return;  
+    }    
+    //创建一个FilterSecurityInterceptor
+    FilterSecurityInterceptor securityInterceptor = createFilterSecurityInterceptor(http, metadataSource,  
+          http.getSharedObject(AuthenticationManager.class));  
+    if (this.filterSecurityInterceptorOncePerRequest != null) {  
+       securityInterceptor.setObserveOncePerRequest(this.filterSecurityInterceptorOncePerRequest);  
+    }    securityInterceptor = postProcess(securityInterceptor);  
+    http.addFilter(securityInterceptor);  
+    http.setSharedObject(FilterSecurityInterceptor.class, securityInterceptor);  
+}
+```
+
+>在[[Spring/Spring_Security_04#createFilterSecurityInterceptor方法\|createFilterSecurityInterceptor]]方法中构建FilterSecurityInterceptor
+
+>在createMetadataSource中构建FilterInvocationSecurityMetadataSource
+>本类中有抽象方法`abstract FilterInvocationSecurityMetadataSource createMetadataSource(H http);`
+>[[Spring/Spring_Security_04#createMetadataSource方法\|在UrlAuthorizationConfigurer中的实现]]
+
+
+#### createFilterSecurityInterceptor方法
+```Java
+private FilterSecurityInterceptor createFilterSecurityInterceptor(H http,  
+       FilterInvocationSecurityMetadataSource metadataSource, AuthenticationManager authenticationManager)  
+       throws Exception {
+    //直接new  
+    FilterSecurityInterceptor securityInterceptor = new FilterSecurityInterceptor();  
+    securityInterceptor.setSecurityMetadataSource(metadataSource); 
+    //调用getAccessDecisionManager 
+    securityInterceptor.setAccessDecisionManager(getAccessDecisionManager(http));  
+    securityInterceptor.setAuthenticationManager(authenticationManager);  
+    securityInterceptor.setSecurityContextHolderStrategy(getSecurityContextHolderStrategy());  
+    securityInterceptor.afterPropertiesSet();  
+    return securityInterceptor;  
+}
+```
+
+#### getAccessDecisionManager方法
+```Java
+private AccessDecisionManager getAccessDecisionManager(H http) {  
+    if (this.accessDecisionManager == null) { 
+	    //调用 createDefaultAccessDecisionManager方法
+       this.accessDecisionManager = createDefaultAccessDecisionManager(http);  
+    }    return this.accessDecisionManager;  
+}
+```
+
+#### createDefaultAccessDecisionManager方法
+```Java
+private AccessDecisionManager createDefaultAccessDecisionManager(H http) {  
+    AffirmativeBased result = new AffirmativeBased(getDecisionVoters(http));  
+    return postProcess(result);  
+}
+```
+
+##### 关于[[Spring/Spring_Security_04#实现类AffirmativeBased\|AffirmativeBased]]
+##### 关于[[Spring/Spring_Security_04#AccessDecisionManager\|AccessDecisionManager]]
+
+##### getDecisionVoters抽象方法
+
+通过getDecisionVoters方法获取投票器
+`abstract List<AccessDecisionVoter<?>> getDecisionVoters(H http);`
+
+实现类
+![Pasted image 20231126170357.png|undefined](/img/user/Pasted%20image%2020231126170357.png)
+[[Spring/Spring_Security_04#getDecisionVoters方法\|在UrlAuthorizationConfigurer中的实现]]
+## AccessDecisionManager
+
+判断有没有权限去访问资源
+
+### 抽象实现类AbstractAccessDecisionManager
+
+`private boolean allowIfAllAbstainDecisions = false;`
+如果都弃权，能不能访问取决于该属性的值
+
+定义了一堆的`private List<AccessDecisionVoter<?>> decisionVoters;`
+将判断具体实现委派给voter
+```Java
+public interface AccessDecisionVoter<S> {  
+
+	//三种结果，同意，弃权，拒绝
+    int ACCESS_GRANTED = 1;  
+  
+    int ACCESS_ABSTAIN = 0;  
+  
+    int ACCESS_DENIED = -1;  
+  
+    boolean supports(ConfigAttribute attribute);  
+  
+    boolean supports(Class<?> clazz);  
+    //通过投票的方式来决定拥有传入的authentication和attributes能不能对object资源进行访问
+    int vote(Authentication authentication, S object, Collection<ConfigAttribute> attributes);  
+  
+}
+```
+
+实现类：
+![Pasted image 20231126164634.png|undefined](/img/user/Pasted%20image%2020231126164634.png)
+分别实现了三种不同的投票规则：一票通过决定，多数通过决定，全部通过决定
+#### 实现类AffirmativeBased
+
+decide方法
+```Java
+public void decide(Authentication authentication, Object object, Collection<ConfigAttribute> configAttributes)  
+       throws AccessDeniedException {  
+    int deny = 0;  
+    for (AccessDecisionVoter voter : getDecisionVoters()) {  
+       int result = voter.vote(authentication, object, configAttributes);  
+       switch (result) {  
+          case AccessDecisionVoter.ACCESS_GRANTED:  
+             return;  
+          case AccessDecisionVoter.ACCESS_DENIED:  
+             deny++;  
+             break;  
+          default:  
+             break;  
+       }    
+    }    
+    //有一个拒绝就抛出异常
+    if (deny > 0) {  
+       throw new AccessDeniedException(  
+             this.messages.getMessage("AbstractAccessDecisionManager.accessDenied", "Access is denied"));  
+    }    
+    // To get this far, every AccessDecisionVoter abstained  
+    //如果弃权，就取决于类中的allowIfAllAbstainDecisions属性
+    checkAllowIfAllAbstainDecisions();  
+}
+```
 
 
 
